@@ -11,10 +11,20 @@ ALERT_CATEGORY = [
 ]
 
 ROLE_ADMIN = "admin"
-ROLE_STEWARD = "steward"
 ROLE_VIEWER = "viewer"
+ROLE_DATA_ENGINEER = "data_engineer"
+ROLE_BUSINESS_ANALYST = "business_analyst"
+ROLE_STEWARD = "steward"
+ROLE_COMPLIANCE_OFFICER = "compliance_officer"
 
-ROLES = [ROLE_ADMIN, ROLE_STEWARD, ROLE_VIEWER]
+ROLES = [
+    ROLE_ADMIN, 
+    ROLE_VIEWER, 
+    ROLE_DATA_ENGINEER, 
+    ROLE_BUSINESS_ANALYST, 
+    ROLE_STEWARD, 
+    ROLE_COMPLIANCE_OFFICER
+]
 
 # PII regex patterns
 PII_PATTERNS = {

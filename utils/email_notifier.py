@@ -50,19 +50,15 @@ def _get_setting(key: str) -> Optional[str]:
 
 
 def _get_recipients(category: str) -> List[str]:
-    """Return list of recipient emails for a given alert category."""
-    # Try category-specific list first
-    category_key = CATEGORY_SETTING_MAP.get(category, "")
-    raw = _get_setting(category_key) if category_key else None
-
-    # Fall back to global default
-    if not raw:
-        raw = _get_setting(DEFAULT_RECIPIENTS_KEY)
-
-    if not raw:
+    """Return list of active admin/data_engineer recipient emails from DB."""
+    # Direct DB query to get active admins (and data_engineers if any)
+    users = fetch_all(
+        "SELECT email FROM users WHERE role IN ('admin', 'data_engineer') AND is_active = 1 AND email IS NOT NULL AND email != ''"
+    )
+    if not users:
         return []
-
-    return [e.strip() for e in raw.split(",") if e.strip()]
+    
+    return list(set(u["email"].strip() for u in users if u["email"].strip()))
 
 
 def _already_notified(alert_id: int) -> bool:
@@ -181,7 +177,7 @@ def send_medium_digest() -> int:
            LEFT JOIN connectors c ON c.id = a.connector_id
            LEFT JOIN datasets d ON d.id = a.dataset_id
            LEFT JOIN email_notification_log enl ON enl.alert_id = a.id AND enl.sent = 1
-           WHERE a.severity = 'medium'
+           WHERE a.severity IN ('critical', 'high', 'medium')
              AND a.status = 'open'
              AND enl.id IS NULL
            ORDER BY a.created_at DESC
@@ -207,6 +203,52 @@ def send_medium_digest() -> int:
         _log_notification(al["id"], list(all_recipients), sent)
 
     logger.info("Medium digest: %d alerts sent=%s", len(alerts), sent)
+    return len(alerts)
+
+
+def send_connector_digest(connector_id: int) -> int:
+    """
+    Send a connector-specific email immediately after a scan completes.
+    Only picks up open alerts for the given connector that haven't been emailed yet.
+    """
+    alerts = fetch_all(
+        """SELECT a.*, c.name AS connector_name, d.dataset_name
+           FROM alerts a
+           LEFT JOIN connectors c ON c.id = a.connector_id
+           LEFT JOIN datasets d ON d.id = a.dataset_id
+           LEFT JOIN email_notification_log enl ON enl.alert_id = a.id AND enl.sent = 1
+           WHERE a.connector_id = %s
+             AND a.severity IN ('critical', 'high', 'medium')
+             AND a.status = 'open'
+             AND enl.id IS NULL
+           ORDER BY a.created_at DESC
+           LIMIT 50""",
+        (connector_id,)
+    )
+
+    if not alerts:
+        logger.info("Connector digest: no new open alerts for connector %s", connector_id)
+        return 0
+
+    recipients = _get_recipients("quality")
+    if not recipients:
+        logger.warning("Connector digest: no recipients found for connector %s", connector_id)
+        return 0
+
+    connector_name = alerts[0].get("connector_name") or f"Connector #{connector_id}"
+    subject = f"🚨 Data Quality Alert: {connector_name} — {len(alerts)} violation(s) detected"
+    html = render_template(
+        "digest_email.html",
+        alerts=alerts,
+        severity_label="Quality Scan",
+        now=datetime.datetime.utcnow()
+    )
+    sent = send_email(recipients, subject, html)
+
+    for al in alerts:
+        _log_notification(al["id"], recipients, sent)
+
+    logger.info("Connector digest for %s: %d alerts sent=%s", connector_name, len(alerts), sent)
     return len(alerts)
 
 

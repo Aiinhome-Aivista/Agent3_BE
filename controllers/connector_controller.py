@@ -63,6 +63,7 @@ class ConnectorIn(BaseModel):
     name: str
     type: str
     config: Dict[str, Any]
+    industry_context: Optional[str] = None
     dataset_credentials: List[DatasetCredentialPayload] = []
 
 
@@ -497,6 +498,7 @@ def _get_db_meta(dialect, host, port, database, username, password, schema, tabl
             return {"row_count": row_count, "columns": cols, "pks": [c["name"] for c in cols if c["is_pk"]], "fks": fks}
 
         if dialect == "mssql":
+            # pyrefly: ignore [missing-import]
             import pyodbc
             drivers = [d for d in pyodbc.drivers() if "SQL Server" in d]
             cs = (f"DRIVER={{{drivers[0]}}};SERVER={host},{int(port or 1433)};"
@@ -1517,6 +1519,13 @@ def run_scan(connector_id: int):
             summary = run_quality_for_connector_type(ctype, triggered_by_rulebook_id=0)
             logger.info("Auto quality check complete for connector %s: %s",
                         connector_id, summary)
+
+            # Send connector-specific email for any new open alerts
+            try:
+                from utils.email_notifier import send_connector_digest
+                send_connector_digest(connector_id)
+            except Exception as mail_err:
+                logger.warning("Email digest failed for connector %s: %s", connector_id, mail_err)
         except Exception as e:
             logger.exception(
                 "Auto quality check failed for connector %s: %s", connector_id, e,
@@ -1754,8 +1763,14 @@ def create_connector(
             ),
         )
 
-    # 4) Background full scan: profiling JSONs + pipeline run history,
-    #    plus any datasets the user didn't pre-credential (they go in as Pending).
+    # 4) If industry context is provided, trigger AI to generate rulebook BEFORE full scan
+    print(f"========== DEBUG: create_connector -> industry_context: {body.industry_context} ==========")
+    if body.industry_context:
+        from utils.ai_helper import generate_rulebook_for_connector
+        print("========== DEBUG: Running generate_rulebook_for_connector synchronously ==========")
+        generate_rulebook_for_connector(new_id, body.industry_context)
+
+    # 5) Background full scan: profiling JSONs + pipeline run history
     background_tasks.add_task(run_scan, new_id)
 
     row = fetch_one("SELECT * FROM connectors WHERE id=%s", (new_id,))

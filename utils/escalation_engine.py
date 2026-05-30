@@ -206,12 +206,8 @@ def _send_escalation_notification(tracking_id: int, level: int, persona_id: int,
             (persona_id,)
         )
 
-        # Fallback to default alert recipient if no mapped users
+        # Fallback to default alert recipient removed as per user request
         recipients = [u["email"].strip() for u in users if u["email"].strip()]
-        if not recipients:
-            default_row = fetch_one("SELECT setting_value FROM app_settings WHERE setting_key = 'alert_email_recipients'")
-            if default_row and default_row["setting_value"]:
-                recipients = [e.strip() for e in default_row["setting_value"].split(",") if e.strip()]
 
         if not recipients:
             logger.warning("No recipients mapped for escalation level %s (Persona: %s); skipping email.", level, persona_name)

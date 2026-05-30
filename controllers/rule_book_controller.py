@@ -245,3 +245,69 @@ def get_latest_rulebook(connector_type: str) -> Optional[dict]:
         "ORDER BY created_at DESC LIMIT 1",
         (ctype,),
     )
+
+
+# ======================================================================
+#  PROPOSED BUSINESS RULES
+# ======================================================================
+@router.get("/proposed")
+def list_proposed_rules(user: dict = Depends(get_current_user)):
+    """Fetch all proposed business rules with their connector names and statuses."""
+    return fetch_all(
+        "SELECT p.*, c.name as connector_name, s.status_name "
+        "FROM proposed_business_rules p "
+        "LEFT JOIN connectors c ON p.connector_id = c.id "
+        "LEFT JOIN status_master s ON p.status_id = s.id "
+        "ORDER BY p.created_at DESC"
+    )
+
+from pydantic import BaseModel
+class ProposedRuleCreate(BaseModel):
+    connector_id: int
+    rule_text: str
+    rule_type: str
+
+@router.post("/proposed")
+def create_proposed_rule(
+    body: ProposedRuleCreate,
+    user: dict = Depends(get_current_user)
+):
+    """Manually create a new proposed business rule."""
+    # Find the industry_type for this connector (either from connector table if it has it, or just use a default/existing)
+    row = fetch_one("SELECT industry_type FROM proposed_business_rules WHERE connector_id=%s LIMIT 1", (body.connector_id,))
+    industry = row["industry_type"] if row else "Custom"
+
+    execute(
+        "INSERT INTO proposed_business_rules (connector_id, industry_type, rule_text, rule_type, status_id) VALUES (%s, %s, %s, %s, 1)",
+        (body.connector_id, industry, body.rule_text, body.rule_type)
+    )
+    return {"status": "success"}
+
+class ProposedRuleUpdate(BaseModel):
+    rule_text: str
+    status_id: int
+
+@router.put("/proposed/{rule_id}")
+def update_proposed_rule(
+    rule_id: int, 
+    body: ProposedRuleUpdate, 
+    background_tasks: BackgroundTasks,
+    user: dict = Depends(get_current_user)
+):
+    """Update rule text or status (e.g., approve/reject)."""
+    row = fetch_one("SELECT id, connector_id FROM proposed_business_rules WHERE id=%s", (rule_id,))
+    if not row:
+        raise HTTPException(status_code=404, detail="Proposed rule not found")
+    
+    execute(
+        "UPDATE proposed_business_rules SET rule_text=%s, status_id=%s, updated_at=%s WHERE id=%s",
+        (body.rule_text, body.status_id, datetime.datetime.now(datetime.timezone.utc), rule_id)
+    )
+
+    # If approved (status_id = 2), automatically trigger the data quality scan for this connector
+    if body.status_id == 2:
+        from controllers.connector_controller import run_scan
+        print(f"========== DEBUG: Rule approved, triggering run_scan for connector {row['connector_id']} ==========")
+        background_tasks.add_task(run_scan, row["connector_id"])
+
+    return {"status": "success"}

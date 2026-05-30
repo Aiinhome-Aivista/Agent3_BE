@@ -216,6 +216,113 @@ def extract_rules_from_rulebook(content: str) -> Dict[str, Any]:
     return parsed
 
 
+def generate_rulebook_for_connector(connector_id: int, industry: str):
+    """Generates an AI-driven rulebook for a specific industry and saves it to the DB."""
+    print(f"========== DEBUG: generate_rulebook_for_connector STARTED for connector {connector_id}, industry {industry} ==========")
+    if not MISTRAL_API_KEY:
+        print(f"========== DEBUG: MISTRAL_API_KEY is not set! ==========")
+        logger.warning("AI disabled. Cannot generate rulebook for connector %s", connector_id)
+        return
+
+    from database.db_connection import fetch_one
+    from utils.common import decrypt_config
+
+    conn_row = fetch_one("SELECT type, config_json FROM connectors WHERE id=%s", (connector_id,))
+    schema_context = ""
+    if conn_row and conn_row["type"] == "mysql":
+        config = decrypt_config(conn_row["config_json"])
+        try:
+            import pymysql
+            cn = pymysql.connect(
+                host=config.get("host"),
+                port=int(config.get("port", 3306)),
+                user=config.get("username"),
+                password=config.get("password"),
+                database=config.get("database"),
+                connect_timeout=5
+            )
+            cur = cn.cursor()
+            cur.execute(
+                "SELECT TABLE_NAME, COLUMN_NAME, DATA_TYPE "
+                "FROM information_schema.COLUMNS WHERE TABLE_SCHEMA=%s LIMIT 100",
+                (config.get("database"),)
+            )
+            rows = cur.fetchall()
+            cn.close()
+            
+            table_dict = {}
+            for r in rows:
+                tname, cname, dtype = r
+                if tname not in table_dict: table_dict[tname] = []
+                table_dict[tname].append(f"{cname}({dtype})")
+            
+            schema_context = "\nDATABASE SCHEMA:\n"
+            for t, cols in table_dict.items():
+                schema_context += f"Table '{t}': {', '.join(cols)}\n"
+            print(f"========== DEBUG: Successfully fetched schema: {len(table_dict)} tables found ==========")
+        except Exception as e:
+            print(f"========== DEBUG: Failed to fetch schema: {e} ==========")
+            logger.error("Could not fetch schema for LLM context: %s", e)
+
+    sys_prompt = (
+        "You are an expert Data Governance and Quality Engineer. "
+        "The user will provide an industry context and optionally a database schema. "
+        "You need to generate a maximum of 6-7 highly meaningful and comprehensive data quality rules relevant for this specific database schema and industry. "
+        "Consolidate similar rules so that you only produce one comprehensive rule per rule_type where possible. "
+        "Include a mix of standard global DQ checks (e.g., row count, null percentage, PII detection, schema drift) "
+        "AND specific contextual business logic checks (e.g., specific column ranges, unique checks, cross-table constraints). "
+        "Each rule MUST have a 'rule_text' explaining the logic (mentioning actual table/column names if available), "
+        "and a 'rule_type' which must be one of: row_count_check, null_check, null_percentage_check, unique_check, "
+        "range_check, regex_check, pii_detection, schema_drift_check, foreign_key_check, custom_sql. "
+        "\n\nOutput ONLY a JSON object with a 'rules' key containing an array of these rule objects. Example: {\"rules\": [{\"rule_text\": \"...\", \"rule_type\": \"...\"}]}"
+    )
+    user_msg = f"INDUSTRY CONTEXT: {industry}\n{schema_context}"
+    print("========== DEBUG: Calling LLM via _chat... ==========")
+    text = _chat(sys_prompt, user_msg, timeout=90, max_tokens=1500)
+    print(f"========== DEBUG: LLM Response received (length: {len(text)}). Parsing JSON... ==========")
+    parsed = _parse_json_block(text)
+    
+    if not isinstance(parsed, list):
+        if isinstance(parsed, dict) and "rules" in parsed:
+            parsed = parsed["rules"]
+        else:
+            parsed = []
+
+    if not parsed:
+        logger.warning("Failed to parse rulebook from LLM for connector %s. Using fallback dummy rules.", connector_id)
+        parsed = [
+            {"rule_text": f"Ensure all critical {industry} records have no nulls.", "rule_type": "null_check"},
+            {"rule_text": f"Verify {industry} transaction IDs are uniquely indexed.", "rule_type": "unique_check"},
+            {"rule_text": f"{industry} amounts must be positive numbers.", "rule_type": "range_check"},
+            {"rule_text": f"Email fields in {industry} must match standard regex.", "rule_type": "regex_check"},
+            {"rule_text": f"Custom {industry} business logic validation.", "rule_type": "custom_sql"}
+        ]
+
+    from database.db_connection import execute
+    
+    for rule in parsed:
+        rule_text = rule.get("rule_text")
+        rule_type = rule.get("rule_type")
+        if not rule_text:
+            continue
+        try:
+            # Insert into proposed_business_rules with status_id = 1 ('pending' in status_master)
+            safe_industry = industry[:50] if industry else ""
+            execute(
+                "INSERT INTO proposed_business_rules "
+                "(connector_id, industry_type, rule_text, rule_type, status_id) "
+                "VALUES (%s, %s, %s, %s, 1)",
+                (connector_id, safe_industry, json.dumps(rule) if isinstance(rule, dict) else rule_text, rule_type)
+            )
+            print(f"========== DEBUG: Inserted rule: {rule_type} ==========")
+        except Exception as e:
+            print(f"========== DEBUG: DB Insert Error: {e} ==========")
+            logger.error("Error inserting proposed rule for connector %s: %s", connector_id, e)
+    
+    print(f"========== DEBUG: DONE! Inserted {len(parsed)} rules. ==========")
+    logger.info("Successfully generated and saved %d rules for connector %s", len(parsed), connector_id)
+
+
 # ----------------------------------------------------------------------
 # Helpers
 # ----------------------------------------------------------------------
@@ -523,6 +630,7 @@ def format_quality_report(
     rulebook: Optional[Dict[str, Any]] = None,
     rulebook_chunks: Optional[List[Any]] = None,
     previous_report: Optional[Dict[str, Any]] = None,
+    approved_business_rules: Optional[List[str]] = None,
 ) -> Dict[str, Any]:
     py_score      = float(py_result.get("score", 0))
     py_conf       = float(py_result.get("confidence", 0))

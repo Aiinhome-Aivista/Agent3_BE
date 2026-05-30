@@ -95,6 +95,7 @@ def _load_rulebook_context(connector_type: str) -> Dict[str, Any]:
     try:
         chunks = search_rule_books(
             rb["rulebook_content"][:2000], top_k=10,
+            # pyrefly: ignore [unexpected-keyword]
             collection=collection_name(connector_type),
         )
     except TypeError:
@@ -1045,6 +1046,7 @@ def _profile_dataset_via_mssql(creds: dict, hint: dict, ds: dict) -> Dict[str, A
         )
 
     try:
+        # pyrefly: ignore [missing-import]
         import pymssql
     except ImportError:
         return _empty_py_result(
@@ -1092,6 +1094,7 @@ def _profile_dataset_via_oracle(creds: dict, hint: dict, ds: dict) -> Dict[str, 
         )
 
     try:
+        # pyrefly: ignore [missing-import]
         import oracledb
     except ImportError:
         return _empty_py_result(
@@ -1198,6 +1201,7 @@ def _profile_dataset_via_snowflake(creds: dict, hint: dict, ds: dict) -> Dict[st
         )
 
     try:
+        # pyrefly: ignore [missing-import]
         import snowflake.connector
     except ImportError:
         return _empty_py_result(
@@ -1253,6 +1257,7 @@ def _profile_dataset_via_blob(creds: dict, hint: dict, ds: dict) -> Dict[str, An
         )
 
     try:
+        # pyrefly: ignore [missing-import]
         from azure.storage.blob import BlobServiceClient
     except ImportError:
         return _empty_py_result(
@@ -1410,6 +1415,7 @@ def _check_databricks_uc_table(ds: dict) -> Dict[str, Any]:
         )
 
     try:
+        # pyrefly: ignore [missing-import]
         from databricks import sql as dbsql
     except ImportError:
         return _empty_py_result(
@@ -1515,6 +1521,13 @@ def _run_quality_for_dataset(dataset_id: int, rb_ctx: Dict[str, Any]) -> Optiona
             "score": 0, "reason": str(e)[:200]
         }]
 
+    # Fetch approved business rules for this connector to inject into the LLM context
+    approved_rules_rows = fetch_all(
+        "SELECT rule_text, rule_type FROM proposed_business_rules WHERE connector_id=%s AND status_id=2",
+        (ds["connector_id"],)
+    )
+    approved_business_rules = [r["rule_text"] for r in approved_rules_rows] if approved_rules_rows else None
+
     llm_report = format_quality_report(
         dataset_metadata={
             "id":             ds["id"],
@@ -1530,6 +1543,7 @@ def _run_quality_for_dataset(dataset_id: int, rb_ctx: Dict[str, Any]) -> Optiona
         rulebook=rb_ctx.get("rulebook"),
         rulebook_chunks=rb_ctx.get("chunks") or [],
         previous_report=previous_py,
+        approved_business_rules=approved_business_rules,
     )
 
     # Extract deep metadata for discovery UI

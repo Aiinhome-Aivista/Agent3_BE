@@ -3,7 +3,9 @@
 Background scheduler for periodic connector rescans.
 Detects new pipelines / datasets / files added in ADF, MySQL, Databricks etc.
 """
+# pyrefly: ignore [missing-import]
 from apscheduler.schedulers.background import BackgroundScheduler
+# pyrefly: ignore [missing-import]
 from apscheduler.triggers.interval import IntervalTrigger
 
 from database.db_connection import fetch_all
@@ -67,7 +69,7 @@ def start_scheduler():
     from utils.email_notifier import send_medium_digest
     _scheduler.add_job(
         send_medium_digest,
-        trigger=IntervalTrigger(hours=1),
+        trigger=IntervalTrigger(minutes=1),
         id="send_medium_digest",
         name="Send consolidates hourly digest for medium-severity alerts",
         replace_existing=True,
