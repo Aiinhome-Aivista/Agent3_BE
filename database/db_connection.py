@@ -26,7 +26,19 @@ def _config():
 
 def get_connection():
     """Return a new MySQL connection."""
-    return pymysql.connect(**_config())
+    config = _config()
+    # Mask password for safety when printing
+    safe_config = config.copy()
+    safe_config['password'] = '***'
+    print(f"--- DB CONNECTION ATTEMPT ---")
+    print(f"Config: {safe_config}")
+    try:
+        conn = pymysql.connect(**config)
+        print("--- DB CONNECTION SUCCESS ---")
+        return conn
+    except Exception as e:
+        print(f"--- DB CONNECTION FAILED: {e} ---")
+        raise
 
 
 @contextmanager

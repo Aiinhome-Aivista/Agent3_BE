@@ -1702,3 +1702,27 @@ def get_dataset_report(dataset_id: int, user: dict = Depends(get_current_user)):
         "python_result": report.get("python"),
         "llm_report":    report.get("llm"),
     }
+
+@router.post("/adf/trigger")
+def trigger_adf_pipeline(pipeline_name: str = "mysql_to_raw"):
+    """Simulates triggering an ADF pipeline"""
+    return {
+        "status": "success", 
+        "data": {
+            "pipeline": pipeline_name, 
+            "status": "Succeeded", 
+            "message": "Raw data successfully ingested to ADLS Landing Zone."
+        }
+    }
+
+@router.post("/databricks/jobs")
+def run_databricks_job(job_name: str = "bronze_ingestion"):
+    """Simulates running a Databricks Job (Bronze/Silver/Gold)"""
+    return {
+        "status": "success", 
+        "data": {
+            "job_name": job_name, 
+            "status": "Succeeded", 
+            "message": f"Databricks {job_name} job completed successfully."
+        }
+    }
