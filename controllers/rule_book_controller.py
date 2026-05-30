@@ -306,8 +306,8 @@ def update_proposed_rule(
 
     # If approved (status_id = 2), automatically trigger the data quality scan for this connector
     if body.status_id == 2:
-        from controllers.connector_controller import run_scan
-        print(f"========== DEBUG: Rule approved, triggering run_scan for connector {row['connector_id']} ==========")
-        background_tasks.add_task(run_scan, row["connector_id"])
+        from controllers.monitoring_controller import run_quality_for_connector
+        print(f"========== DEBUG: Rule approved, triggering quality scan for connector {row['connector_id']} ==========")
+        background_tasks.add_task(run_quality_for_connector, row["connector_id"])
 
     return {"status": "success"}

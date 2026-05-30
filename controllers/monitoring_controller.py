@@ -1600,6 +1600,13 @@ def _run_quality_for_dataset(dataset_id: int, rb_ctx: Dict[str, Any]) -> Optiona
          safe_json_dumps({"python": py_result, "llm": llm_report}),
          datetime.datetime.utcnow()),
     )
+
+    try:
+        from controllers.alert_evaluator import evaluate_and_create_alerts
+        evaluate_and_create_alerts(dataset_id, ds, float(py_result["score"]), py_result, llm_report)
+    except Exception as e:
+        logger.error("Failed to evaluate and create alerts for dataset %s: %s", dataset_id, e)
+
     return llm_report
 
 
@@ -1658,6 +1665,55 @@ def run_quality_for_connector_type(db_connector_type: str,
         "completed_at":     datetime.datetime.utcnow().isoformat(),
     }
     logger.info("Quality scan complete: %s", summary)
+    return summary
+
+
+def run_quality_for_connector(connector_id: int, triggered_by_rulebook_id: int = 0) -> Dict[str, Any]:
+    """Run quality check for all datasets of a single connector."""
+    row = fetch_one("SELECT type FROM connectors WHERE id=%s", (connector_id,))
+    if not row:
+        logger.error("Connector %s not found for quality scan", connector_id)
+        return {}
+    
+    db_connector_type = row["type"]
+    trigger_label = (f"rulebook {triggered_by_rulebook_id}"
+                     if triggered_by_rulebook_id
+                     else f"connector {connector_id}")
+    logger.info("Quality scan triggered by %s for connector_id=%s",
+                trigger_label, connector_id)
+
+    rb_ctx = _load_rulebook_context(db_connector_type)
+    
+    datasets = fetch_all(
+        "SELECT d.id "
+        "FROM datasets d "
+        "WHERE d.connector_id=%s "
+        "  AND COALESCE(d.credential_status, 'Connected') <> 'Pending'",
+        (connector_id,))
+
+    processed, failed, skipped = 0, 0, 0
+    for d in datasets:
+        try:
+            result = _run_quality_for_dataset(d["id"], rb_ctx)
+            if result is None:
+                skipped += 1
+            else:
+                processed += 1
+        except Exception:
+            logger.exception("Quality check failed for dataset %s", d["id"])
+            failed += 1
+
+    summary = {
+        "connector_id":     connector_id,
+        "connector_type":   db_connector_type,
+        "triggered_by":     trigger_label,
+        "datasets_total":   len(datasets),
+        "datasets_passed":  processed,
+        "datasets_failed":  failed,
+        "datasets_skipped": skipped,
+        "completed_at":     datetime.datetime.utcnow().isoformat(),
+    }
+    logger.info("Quality scan complete for connector %s: %s", connector_id, summary)
     return summary
 
 

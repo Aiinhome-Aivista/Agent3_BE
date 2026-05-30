@@ -746,6 +746,7 @@ def format_quality_report(
         "rulebook": {
             "name":     (rulebook or {}).get("rulebook_name"),
             "excerpts": rb_excerpts,
+            "approved_business_rules": approved_business_rules or [],
         },
     }
 
@@ -772,7 +773,7 @@ def format_quality_report(
         "    is true, write 'No prior runs to compute deviation.'\n"
         "  technical_summary  — 2-4 sentences quoting row count, column count, PK/FK, "
         "    total_runs/failed_runs, rules passed/failed, missing/junk/outlier "
-        "    percentages from dashboard_metrics. Mention 'no data' when null.\n"
+        "    percentages from dashboard_metrics. Explicitly state whether the data complies with the 'approved_business_rules' (if any).\n"
         "  contextual_summary — 2-4 sentences about what the asset IS based on "
         "    asset_kind, name, pipeline_meta.activities, dataset_info.tables, "
         "    or table_info. Quote names exactly.\n"
