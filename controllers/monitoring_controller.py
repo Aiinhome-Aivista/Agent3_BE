@@ -1714,6 +1714,14 @@ def run_quality_for_connector(connector_id: int, triggered_by_rulebook_id: int =
         "completed_at":     datetime.datetime.utcnow().isoformat(),
     }
     logger.info("Quality scan complete for connector %s: %s", connector_id, summary)
+
+    # Send connector-specific email for any new open alerts
+    try:
+        from utils.email_notifier import send_connector_digest
+        send_connector_digest(connector_id)
+    except Exception as mail_err:
+        logger.warning("Email digest failed for connector %s: %s", connector_id, mail_err)
+
     return summary
 
 

@@ -44,10 +44,10 @@ load_dotenv()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ---- STARTUP ----
-    start_scheduler()
+    # start_scheduler()
     yield
     # ---- SHUTDOWN ----
-    shutdown_scheduler()
+    # shutdown_scheduler()
 
 
 app = FastAPI(

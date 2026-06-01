@@ -15,7 +15,7 @@ load_dotenv()
 # --- Logging --------------------------------------------------------------
 os.makedirs("logs", exist_ok=True)
 logging.basicConfig(
-    level=logging.INFO,
+    level=logging.WARNING,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
     handlers=[
         logging.FileHandler("logs/app.log"),

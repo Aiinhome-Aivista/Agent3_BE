@@ -14,10 +14,13 @@ def evaluate_and_create_alerts(dataset_id: int, ds: dict, quality_score: float, 
         if failed_rules:
             alert_msg += "Failed Rules: " + "; ".join([f"{r.get('rule_type') or r.get('rule')}: {r.get('reason')}" for r in failed_rules[:3]])
 
+        recs = llm_report.get("recommendations", [])
+        recs_str = "\n".join(recs) if isinstance(recs, list) else str(recs)
+
         try:
             alert_id = execute(
-                "INSERT INTO alerts (connector_id, dataset_id, category, severity, title, message, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO alerts (connector_id, dataset_id, category, severity, title, message, status, ai_recommendation) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     ds["connector_id"],
                     dataset_id,
@@ -26,6 +29,7 @@ def evaluate_and_create_alerts(dataset_id: int, ds: dict, quality_score: float, 
                     alert_title,
                     alert_msg,
                     "open",
+                    recs_str,
                 ),
             )
             logger.info("Created quality alert for dataset %d (ID: %s)", dataset_id, alert_id)
@@ -61,10 +65,13 @@ def evaluate_and_create_alerts(dataset_id: int, ds: dict, quality_score: float, 
         alert_title = f"PII detected in {ds['dataset_name']}"
         alert_msg = f"Detected PII categories: {', '.join(pii_categories)}"
 
+        recs = llm_report.get("recommendations", [])
+        recs_str = "\n".join(recs) if isinstance(recs, list) else str(recs)
+
         try:
             alert_id = execute(
-                "INSERT INTO alerts (connector_id, dataset_id, category, severity, title, message, status) "
-                "VALUES (%s, %s, %s, %s, %s, %s, %s)",
+                "INSERT INTO alerts (connector_id, dataset_id, category, severity, title, message, status, ai_recommendation) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)",
                 (
                     ds["connector_id"],
                     dataset_id,
@@ -73,6 +80,7 @@ def evaluate_and_create_alerts(dataset_id: int, ds: dict, quality_score: float, 
                     alert_title,
                     alert_msg,
                     "open",
+                    recs_str,
                 ),
             )
             logger.info("Created PII alert for dataset %d (ID: %s)", dataset_id, alert_id)
