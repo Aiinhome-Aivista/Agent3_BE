@@ -306,8 +306,20 @@ def update_proposed_rule(
 
     # If approved (status_id = 2), automatically trigger the data quality scan for this connector
     if body.status_id == 2:
+        import json
         from controllers.monitoring_controller import run_quality_for_connector
-        print(f"========== DEBUG: Rule approved, triggering quality scan for connector {row['connector_id']} ==========")
+        
+        # Mark all datasets as scanning safely
+        dsets = fetch_all("SELECT id, ai_analysis_json FROM datasets WHERE connector_id=%s", (row["connector_id"],))
+        for d in dsets:
+            try:
+                j = json.loads(d["ai_analysis_json"] or '{}')
+            except:
+                j = {}
+            j["is_scanning"] = True
+            execute("UPDATE datasets SET ai_analysis_json=%s WHERE id=%s", (json.dumps(j), d["id"]))
+            
+        print(f"========== DEBUG: Rule approved, triggering background quality scan for connector {row['connector_id']} ==========")
         background_tasks.add_task(run_quality_for_connector, row["connector_id"])
 
     return {"status": "success"}

@@ -96,11 +96,13 @@ def _extract_dashboard_fields(ai_json: Optional[str]) -> dict:
         "junk_data_pct":     None, "junk_data_band":     None,
         "outlier_pct":       None, "outlier_band":       None,
         "asset_kind":        None,
+        "is_scanning":       False,
     }
     if not ai_json:
         return out
     try:
         data = json.loads(ai_json)
+        out["is_scanning"] = data.get("is_scanning", False)
         llm = data.get("llm") or {}
         out["missing_data_pct"]  = llm.get("missing_data_pct")
         out["missing_data_band"] = llm.get("missing_data_band")

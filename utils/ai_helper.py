@@ -256,71 +256,121 @@ def generate_rulebook_for_connector(connector_id: int, industry: str):
                 if tname not in table_dict: table_dict[tname] = []
                 table_dict[tname].append(f"{cname}({dtype})")
             
-            schema_context = "\nDATABASE SCHEMA:\n"
-            for t, cols in table_dict.items():
+            schema_context = "\nDATABASE SCHEMA & SAMPLE DATA:\n"
+            for t, cols in list(table_dict.items())[:5]: # Limit to 5 tables for context
                 schema_context += f"Table '{t}': {', '.join(cols)}\n"
+                try:
+                    cur.execute(f"SELECT * FROM `{t}` LIMIT 3")
+                    sample_rows = cur.fetchall()
+                    if sample_rows:
+                        schema_context += f"Sample Data for {t}:\n"
+                        for row in sample_rows:
+                            schema_context += f"  {row}\n"
+                except Exception as e:
+                    logger.warning(f"Could not fetch sample data for table {t}: {e}")
+                    
             print(f"========== DEBUG: Successfully fetched schema: {len(table_dict)} tables found ==========")
         except Exception as e:
             print(f"========== DEBUG: Failed to fetch schema: {e} ==========")
             logger.error("Could not fetch schema for LLM context: %s", e)
 
     sys_prompt = (
-        "You are an expert Data Governance and Quality Engineer. "
-        "The user will provide an industry context and optionally a database schema. "
-        "You need to generate a maximum of 6-7 highly meaningful and comprehensive data quality rules relevant for this specific database schema and industry. "
-        "Consolidate similar rules so that you only produce one comprehensive rule per rule_type where possible. "
-        "Include a mix of standard global DQ checks (e.g., row count, null percentage, PII detection, schema drift) "
-        "AND specific contextual business logic checks (e.g., specific column ranges, unique checks, cross-table constraints). "
-        "Each rule MUST have a 'rule_text' explaining the logic (mentioning actual table/column names if available), "
-        "and a 'rule_type' which must be one of: row_count_check, null_check, null_percentage_check, unique_check, "
-        "range_check, regex_check, pii_detection, schema_drift_check, foreign_key_check, custom_sql. "
-        "\n\nOutput ONLY a JSON object with a 'rules' key containing an array of these rule objects. Example: {\"rules\": [{\"rule_text\": \"...\", \"rule_type\": \"...\"}]}"
+        "You are a Senior Data Governance, Data Quality, and Business Rules Architect.\n\n"
+        "Your task is to analyze the provided database schema and business context and automatically identify the business domain.\n"
+        "The database may belong to any domain including but not limited to: Banking, Insurance, Healthcare, Retail, Sales, Procurement, Supply Chain, Manufacturing, HR, Education, Telecom, Logistics.\n"
+        "Do NOT assume any domain beforehand.\n\n"
+        "FIRST:\n"
+        "1. Analyze the schema.\n"
+        "2. Analyze table names, column names, relationships, and business context.\n"
+        "3. Infer the business domain.\n\n"
+        "THEN:\n"
+        "Generate:\n"
+        "* Maximum 6 meaningful Technical Rules\n"
+        "* Maximum 4 meaningful Standard Business Rules\n\n"
+        "TECHNICAL RULES SHOULD FOCUS ON: Null Validation, Duplicate Detection, Unique Constraints, Data Format Validation, Range Validation, Referential Integrity, Schema Consistency, Data Freshness.\n"
+        "BUSINESS RULES SHOULD FOCUS ON: Domain-specific business validations, Cross-table consistency checks, Transaction integrity, Reconciliation logic, Business process compliance.\n\n"
+        "STRICT RULES:\n"
+        "1. Use actual table names and columns.\n"
+        "2. Do not generate generic rules.\n"
+        "3. Do not create rules that cannot be inferred from the schema.\n"
+        "4. Business rules must be domain-aware.\n"
+        "5. If relationships exist, generate cross-table validations.\n"
+        "6. Prioritize the most valuable production-grade rules.\n"
+        "7. Return only the top 6 technical and top 4 business rules.\n\n"
+        "OUTPUT FORMAT:\n"
+        "{\n"
+        '  "detected_domain": "",\n'
+        '  "technical_rules": [\n'
+        '    {\n'
+        '      "rule_name": "",\n'
+        '      "rule_type": "",\n'
+        '      "description": ""\n'
+        '    }\n'
+        '  ],\n'
+        '  "business_rules": [\n'
+        '    {\n'
+        '      "rule_name": "",\n'
+        '      "rule_type": "",\n'
+        '      "description": ""\n'
+        '    }\n'
+        '  ]\n'
+        "}\n\n"
+        "Return VALID JSON ONLY."
     )
-    user_msg = f"INDUSTRY CONTEXT: {industry}\n{schema_context}"
+    user_msg = f"BUSINESS CONTEXT:\n{industry}\n\nDATABASE SCHEMA:\n{schema_context}"
     print("========== DEBUG: Calling LLM via _chat... ==========")
     text = _chat(sys_prompt, user_msg, timeout=90, max_tokens=1500)
     print(f"========== DEBUG: LLM Response received (length: {len(text)}). Parsing JSON... ==========")
     parsed = _parse_json_block(text)
     
-    if not isinstance(parsed, list):
-        if isinstance(parsed, dict) and "rules" in parsed:
-            parsed = parsed["rules"]
-        else:
-            parsed = []
+    technical_rules = []
+    business_rules = []
 
-    if not parsed:
+    if isinstance(parsed, dict):
+        technical_rules = parsed.get("technical_rules", [])
+        business_rules = parsed.get("business_rules", [])
+        print(f"========== DEBUG: Detected Domain: {parsed.get('detected_domain', 'Unknown')} ==========")
+
+    if not technical_rules and not business_rules:
         logger.warning("Failed to parse rulebook from LLM for connector %s. Using fallback dummy rules.", connector_id)
-        parsed = [
-            {"rule_text": f"Ensure all critical {industry} records have no nulls.", "rule_type": "null_check"},
-            {"rule_text": f"Verify {industry} transaction IDs are uniquely indexed.", "rule_type": "unique_check"},
-            {"rule_text": f"{industry} amounts must be positive numbers.", "rule_type": "range_check"},
-            {"rule_text": f"Email fields in {industry} must match standard regex.", "rule_type": "regex_check"},
-            {"rule_text": f"Custom {industry} business logic validation.", "rule_type": "custom_sql"}
+        technical_rules = [
+            {"description": f"Ensure all critical {industry} records have no nulls.", "rule_type": "null_check"},
+            {"description": f"Verify {industry} transaction IDs are uniquely indexed.", "rule_type": "unique_check"}
+        ]
+        business_rules = [
+            {"description": f"Specific business logic validation based on {industry} standards.", "rule_type": "business_logic"}
         ]
 
     from database.db_connection import execute
     
-    for rule in parsed:
-        rule_text = rule.get("rule_text")
-        rule_type = rule.get("rule_type")
-        if not rule_text:
-            continue
-        try:
-            # Insert into proposed_business_rules with status_id = 1 ('pending' in status_master)
-            safe_industry = industry[:50] if industry else ""
-            execute(
-                "INSERT INTO proposed_business_rules "
-                "(connector_id, industry_type, rule_text, rule_type, status_id) "
-                "VALUES (%s, %s, %s, %s, 1)",
-                (connector_id, safe_industry, json.dumps(rule) if isinstance(rule, dict) else rule_text, rule_type)
-            )
-            print(f"========== DEBUG: Inserted rule: {rule_type} ==========")
-        except Exception as e:
-            print(f"========== DEBUG: DB Insert Error: {e} ==========")
-            logger.error("Error inserting proposed rule for connector %s: %s", connector_id, e)
+    # Helper to insert rules
+    def insert_rules(rules_list, default_type="custom_sql"):
+        count = 0
+        for rule in rules_list:
+            rule_text = rule.get("description") or rule.get("rule_text") or rule.get("rule_name")
+            rule_type = rule.get("rule_type") or default_type
+            if not rule_text:
+                continue
+            try:
+                safe_industry = industry[:50] if industry else ""
+                execute(
+                    "INSERT INTO proposed_business_rules "
+                    "(connector_id, industry_type, rule_text, rule_type, status_id) "
+                    "VALUES (%s, %s, %s, %s, 1)",
+                    (connector_id, safe_industry, json.dumps(rule) if isinstance(rule, dict) else rule_text, rule_type)
+                )
+                print(f"========== DEBUG: Inserted rule: {rule_type} ==========")
+                count += 1
+            except Exception as e:
+                print(f"========== DEBUG: DB Insert Error: {e} ==========")
+                logger.error("Error inserting proposed rule for connector %s: %s", connector_id, e)
+        return count
+        
+    inserted_tech = insert_rules(technical_rules, "technical_check")
+    inserted_biz = insert_rules(business_rules, "business_logic_check")
     
-    print(f"========== DEBUG: DONE! Inserted {len(parsed)} rules. ==========")
-    logger.info("Successfully generated and saved %d rules for connector %s", len(parsed), connector_id)
+    print(f"========== DEBUG: DONE! Inserted {inserted_tech} tech rules and {inserted_biz} biz rules. ==========")
+    logger.info("Successfully generated and saved %d tech rules, %d biz rules for connector %s", inserted_tech, inserted_biz, connector_id)
 
 
 # ----------------------------------------------------------------------

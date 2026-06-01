@@ -45,6 +45,7 @@ router = APIRouter(prefix="/api/connectors", tags=["connectors"])
 class ConnectorTestIn(BaseModel):
     type: str
     config: Dict[str, Any]
+    connector_id: Optional[int] = None
 
 
 class DatasetCredentialPayload(BaseModel):
@@ -1376,7 +1377,7 @@ def preview_scan(conn_type: str, cfg: Dict[str, Any]) -> Dict[str, List[dict]]:
 _TIER2_REQUIRED_TYPES = {"dataset", "table", "view"}
 
 
-def run_scan(connector_id: int):
+def run_scan(connector_id: int, skip_quality: bool = False):
     try:
         connector = fetch_one("SELECT * FROM connectors WHERE id=%s", (connector_id,))
         if not connector:
@@ -1511,14 +1512,15 @@ def run_scan(connector_id: int):
                     connector_id, new_datasets_added)
 
         try:
-            from controllers.monitoring_controller import run_quality_for_connector_type
-            logger.info(
-                "Auto-triggering quality check for connector %s (%s) — "
-                "only Connected datasets will be processed", connector_id, ctype,
-            )
-            summary = run_quality_for_connector_type(ctype, triggered_by_rulebook_id=0)
-            logger.info("Auto quality check complete for connector %s: %s",
-                        connector_id, summary)
+            if not skip_quality:
+                from controllers.monitoring_controller import run_quality_for_connector_type
+                logger.info(
+                    "Auto-triggering quality check for connector %s (%s) — "
+                    "only Connected datasets will be processed", connector_id, ctype,
+                )
+                summary = run_quality_for_connector_type(ctype, triggered_by_rulebook_id=0)
+                logger.info("Auto quality check complete for connector %s: %s",
+                            connector_id, summary)
 
             # Send connector-specific email for any new open alerts
             try:
@@ -1581,6 +1583,7 @@ def _serialize(row: dict) -> dict:
         "last_scanned_at": row.get("last_scanned_at"),
         "created_at":      row.get("created_at"),
         "config":          _mask(cfg),
+        "industry_context": row.get("industry_context"),
     }
 
 
@@ -1616,9 +1619,19 @@ def _serialize_dataset(row: dict) -> dict:
 # ============================================================
 @router.get("/list")
 def list_connectors(user: dict = Depends(get_current_user)):
+    try:
+        execute("ALTER TABLE connectors ADD COLUMN industry_context TEXT")
+    except Exception:
+        pass
+        
+    try:
+        execute("ALTER TABLE proposed_business_rules MODIFY COLUMN industry_type TEXT")
+    except Exception:
+        pass
+
     rows = fetch_all(
         "SELECT id, name, type, status, last_tested_at, last_scanned_at, "
-        "config_json, created_at FROM connectors ORDER BY id DESC"
+        "config_json, created_at, industry_context FROM connectors ORDER BY id DESC"
     )
     return [_serialize(r) for r in rows]
 
@@ -1627,7 +1640,7 @@ def list_connectors(user: dict = Depends(get_current_user)):
 def get_connector(cid: int, user: dict = Depends(get_current_user)):
     row = fetch_one(
         "SELECT id, name, type, status, last_tested_at, last_scanned_at, "
-        "config_json, created_at FROM connectors WHERE id=%s",
+        "config_json, created_at, industry_context FROM connectors WHERE id=%s",
         (cid,),
     )
     if not row:
@@ -1637,12 +1650,20 @@ def get_connector(cid: int, user: dict = Depends(get_current_user)):
 
 @router.post("/test-connection")
 def test_endpoint(body: ConnectorTestIn, user: dict = Depends(get_current_user)):
-    """Tier-1 test + LIGHTWEIGHT preview of datasets and pipelines.
-    The frontend uses preview.datasets[*].source_system_type and
-    preview.datasets[*].required_fields to render Tier-2 credential forms
-    BEFORE the user clicks Save."""
+    """Tier-1 test + LIGHTWEIGHT preview of datasets and pipelines."""
     if body.type not in CONNECTOR_TYPES:
         raise HTTPException(status_code=400, detail="Invalid connector type")
+
+    # Unmask secrets if testing an existing connector with edited fields
+    if body.connector_id:
+        old_row = fetch_one("SELECT config_json FROM connectors WHERE id=%s", (body.connector_id,))
+        if old_row:
+            old_cfg = decrypt_config(old_row["config_json"])
+            for key, val in body.config.items():
+                if isinstance(val, str) and ("***" in val or val == "********"):
+                    if key in old_cfg:
+                        body.config[key] = old_cfg[key]
+
     try:
         details = test_connection(body.type, body.config)
     except Exception as e:
@@ -1729,13 +1750,14 @@ def create_connector(
     try:
         new_id = execute(
             "INSERT INTO connectors (name, type, config_json, status, "
-            "last_tested_at, created_at, created_by) "
-            "VALUES (%s, %s, %s, 'Connected', %s, %s, %s)",
+            "last_tested_at, created_at, created_by, industry_context) "
+            "VALUES (%s, %s, %s, 'Connected', %s, %s, %s, %s)",
             (
                 body.name, body.type, enc,
                 datetime.now(timezone.utc),
                 datetime.now(timezone.utc),
                 user.get("user_id"),
+                body.industry_context,
             ),
         )
     except pymysql.err.IntegrityError:
@@ -1764,14 +1786,12 @@ def create_connector(
         )
 
     # 4) If industry context is provided, trigger AI to generate rulebook BEFORE full scan
-    print(f"========== DEBUG: create_connector -> industry_context: {body.industry_context} ==========")
     if body.industry_context:
         from utils.ai_helper import generate_rulebook_for_connector
-        print("========== DEBUG: Running generate_rulebook_for_connector synchronously ==========")
         generate_rulebook_for_connector(new_id, body.industry_context)
 
-    # 5) Background full scan: profiling JSONs + pipeline run history
-    background_tasks.add_task(run_scan, new_id)
+    # 5) Background full scan: skip quality until rules are approved
+    background_tasks.add_task(run_scan, new_id, True)
 
     row = fetch_one("SELECT * FROM connectors WHERE id=%s", (new_id,))
     return _serialize(row)
@@ -1849,8 +1869,8 @@ def update_connector(
     try:
         execute(
             "UPDATE connectors SET name=%s, type=%s, config_json=%s, status=%s, "
-            "last_tested_at=%s WHERE id=%s",
-            (body.name, body.type, enc, status, datetime.now(timezone.utc), cid),
+            "last_tested_at=%s, industry_context=%s WHERE id=%s",
+            (body.name, body.type, enc, status, datetime.now(timezone.utc), body.industry_context, cid),
         )
     except pymysql.err.IntegrityError:
         raise HTTPException(status_code=409, detail="Connector name already exists")
