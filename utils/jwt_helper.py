@@ -2,7 +2,7 @@
 import os
 import jwt
 import datetime
-from passlib.context import CryptContext
+import bcrypt
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -11,16 +11,15 @@ JWT_SECRET = os.getenv("JWT_SECRET", "changeme")
 JWT_ALGO = os.getenv("JWT_ALGORITHM", "HS256")
 JWT_EXP_HOURS = int(os.getenv("JWT_EXPIRE_HOURS", "12"))
 
-pwd_ctx = CryptContext(schemes=["bcrypt"], deprecated="auto")
-
 
 def hash_password(plain: str) -> str:
-    return pwd_ctx.hash(plain)
+    salt = bcrypt.gensalt(rounds=12)
+    return bcrypt.hashpw(plain.encode("utf-8"), salt).decode("utf-8")
 
 
 def verify_password(plain: str, hashed: str) -> bool:
     try:
-        return pwd_ctx.verify(plain, hashed)
+        return bcrypt.checkpw(plain.encode("utf-8"), hashed.encode("utf-8"))
     except Exception:
         return False
 
