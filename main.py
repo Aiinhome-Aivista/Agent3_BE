@@ -41,6 +41,7 @@ load_dotenv()
 #     stop_quality_check_scheduler()
 #     logger.info("DQ Sentinel shutting down...")
 
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     # ---- STARTUP ----
@@ -54,7 +55,7 @@ app = FastAPI(
     title="DQ Sentinel — Enterprise Data Observability Platform",
     version="1.0.0",
     description="AI-powered data quality, governance, and cloud monitoring.",
-    lifespan=lifespan
+    lifespan=lifespan,
 )
 
 # origins = [
@@ -103,6 +104,6 @@ if __name__ == "__main__":
     uvicorn.run(
         "main:app",
         host=os.getenv("APP_HOST", "0.0.0.0"),
-        port=int(os.getenv("APP_PORT", "3004")),
+        port=int(os.getenv("APP_PORT", "3022")),
         reload=True,
     )
